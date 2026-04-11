@@ -72,16 +72,25 @@ def build_bbox_linesets(bboxes: np.ndarray, color: tuple = [0.0, 1.0, 0.0]) -> l
 	],
 	dtype=np.int32,
     )
+    color = np.array(color)
 
     line_sets = []
     for i, box in enumerate(bboxes):
         ls = o3d.geometry.LineSet()
         ls.points = o3d.utility.Vector3dVector(box.astype(np.float64))
         ls.lines = o3d.utility.Vector2iVector(box_edges)
-        color = np.array(color)
         ls.colors = o3d.utility.Vector3dVector(np.tile(color, (len(box_edges), 1)))
         line_sets.append(ls)
     return line_sets
+
+def print_sample_stats(sample_dir: Path, xyz, bbox, masks, rgb):
+    print(f"\n--- {sample_dir.name} ---")
+    print(f"RGB shape:        {rgb.shape}")
+    print(f"Point cloud shape:{xyz.shape}")
+    print(f"Masks shape:      {masks.shape}")
+    print(f"BBoxes shape:     {bbox.shape}  ({bbox.shape[0]} objects)")
+    print(f"PC Z range:       [{xyz[2].min():.3f}, {xyz[2].max():.3f}]")
+    print(f"BBox center range: x={bbox[:,:,0].mean():.3f}, y={bbox[:,:,1].mean():.3f}, z={bbox[:,:,2].mean():.3f}")
 
 def visualize_sample(sample_dir):
 
@@ -101,6 +110,10 @@ def visualize_sample(sample_dir):
     points = convert_xyz_to_points(xyz)
     colors = rgb.reshape(-1, 3).astype(np.float32)/255.0
 
+    valid = np.isfinite(points).all(axis=1) & (points != 0).any(axis=1)
+    points = points[valid]
+    colors = colors[valid]
+
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
     pcd.colors = o3d.utility.Vector3dVector(colors)
@@ -109,14 +122,15 @@ def visualize_sample(sample_dir):
     frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
     o3d.visualization.draw_geometries([pcd,frame, *bbox_lines])
 
+    print_sample_stats(sample_dir, xyz, bbox, masks, rgb)
+
 def main():
     
     raw_data_dir = PROJECT_ROOT / "data" / "raw_data"
     samples = list_samples(raw_data_dir)
 
     for sample in samples[:10]:
-        sample_dir = raw_data_dir / sample
-        visualize_sample(sample_dir)
+        visualize_sample(sample)
 
 if __name__ == "__main__":
     main()
