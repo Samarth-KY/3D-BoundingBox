@@ -1,24 +1,10 @@
-import os
-import sys
 import numpy as np
 import open3d as o3d
 from PIL import Image
 from pathlib import Path
 import matplotlib.pyplot as plt
-
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-def list_samples(root: Path) -> list[Path]:
-    return sorted([p for p in root.iterdir() if p.is_dir()])
-
-def load_sample(sample_dir: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    xyz = np.load(sample_dir / "pc.npy")
-    bbox = np.load(sample_dir / "bbox3d.npy")
-    masks = np.load(sample_dir / "mask.npy")
-    rgb = np.asarray(Image.open(sample_dir / "rgb.jpg").convert("RGB"))
-
-    return xyz, bbox, masks, rgb
+from config.config import *
+from data.preprocessing import list_samples, load_sample, convert_xyz_to_points
 
 def overlay_mask(rgb: np.ndarray, masks:np.ndarray, alpha:float = 0.5) -> np.ndarray:
     if masks.ndim == 2:
@@ -40,21 +26,11 @@ def overlay_mask(rgb: np.ndarray, masks:np.ndarray, alpha:float = 0.5) -> np.nda
     
     return np.clip(masked_rgb, 0, 255).astype(np.uint8)
 
-def convert_xyz_to_points(xyz: np.ndarray) -> np.ndarray:
-    # Dataset format: [3, H, W], where channels are x,y,z
-    if xyz.ndim == 3 and xyz.shape[0] == 3:
-        xyz = np.moveaxis(xyz, 0, -1) # [3, H, W] -> [H, W, 3]
-        points = xyz.reshape(-1, 3) # [H, W, 3] -> [H*W, 3]
-    elif xyz.ndim == 3 and xyz.shape[-1] == 3:
-        points = xyz.reshape(-1, 3) # [H, W, 3] -> [H*W, 3]
-    else:
-        raise ValueError(f"Unsupported point cloud shape: {xyz.shape}")
-    return points
-
 def build_bbox_linesets(bboxes: np.ndarray, color: tuple = [0.0, 1.0, 0.0]) -> list[o3d.geometry.LineSet]:
     if bboxes.ndim != 3 or bboxes.shape[1:] != (8, 3):
         raise ValueError(f"Expected bbox shape [N, 8, 3], got {bboxes.shape}")
      
+    # Cuboid connectivity for 8 corner points.
     box_edges = np.array(
 	[
 		[0, 1],
@@ -107,18 +83,21 @@ def visualize_sample(sample_dir):
     
     plt.show()
 
+    # Flatten XYZ map into Nx3 points and align RGB colors to the same flattening order.
     points = convert_xyz_to_points(xyz)
     colors = rgb.reshape(-1, 3).astype(np.float32)/255.0
 
+    # Drop invalid points (NaN/Inf/zeros).
     valid = np.isfinite(points).all(axis=1) & (points != 0).any(axis=1)
     points = points[valid]
     colors = colors[valid]
-
+        
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
     pcd.colors = o3d.utility.Vector3dVector(colors)
     bbox_lines = build_bbox_linesets(bbox)
 
+    # Add a small coordinate frame at camera origin.
     frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
     o3d.visualization.draw_geometries([pcd,frame, *bbox_lines])
 
@@ -126,8 +105,7 @@ def visualize_sample(sample_dir):
 
 def main():
     
-    raw_data_dir = PROJECT_ROOT / "data" / "raw_data"
-    samples = list_samples(raw_data_dir)
+    samples = list_samples(raw_data_dir) # raw_data_dir defined in config
 
     for sample in samples[:10]:
         visualize_sample(sample)
