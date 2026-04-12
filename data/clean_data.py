@@ -13,6 +13,11 @@ from data.preprocessing import list_scenes, load_scene, convert_xyz_to_points, e
 from config.config import *
 from utils.visualization import visualize_scene
 
+# Data cleanup config
+BBOX_TOL = 0.05 # enlarges each bbox side by a percentage.
+MIN_INSIDE_RATIO = 0.80 # keeps an instance if most points are inside the expanded box.
+MIN_VALID_POINTS = 20 # min number of points inside bbox for a valid instance
+
 def build_obb(corners:np.ndarray, tolerance:float) -> o3d.geometry.OrientedBoundingBox:
     if corners.shape != (8, 3):
         raise ValueError(f"Expected corners shape (8, 3), got {corners.shape}")
@@ -78,10 +83,10 @@ def main():
     print(f"Valid instances:    {len(valid)}")
     print(f"Rejected instances: {len(rejected)}")
 
-    with open(cleaned_data_json_dir, "w") as f:
+    with open(valid_instances_json_dir, "w") as f:
         json.dump(valid, f, indent=2)
     
-    print(f"Saved to {cleaned_data_json_dir}")
+    print(f"Saved to {valid_instances_json_dir}")
 
     # Visualize a few examples before and after cleanup.
     num_vis_scenes = 3
