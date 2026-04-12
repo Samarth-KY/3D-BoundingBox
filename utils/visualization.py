@@ -1,10 +1,16 @@
+import sys
 import numpy as np
 import open3d as o3d
 from PIL import Image
 from pathlib import Path
 import matplotlib.pyplot as plt
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from config.config import *
-from data.preprocessing import list_samples, load_sample, convert_xyz_to_points
+from data.preprocessing import list_scenes, load_scene, convert_xyz_to_points
 
 def overlay_mask(rgb: np.ndarray, masks:np.ndarray, alpha:float = 0.5) -> np.ndarray:
     if masks.ndim == 2:
@@ -59,8 +65,8 @@ def build_bbox_linesets(bboxes: np.ndarray, color: tuple = [0.0, 1.0, 0.0]) -> l
         line_sets.append(ls)
     return line_sets
 
-def print_sample_stats(sample_dir: Path, xyz, bbox, masks, rgb):
-    print(f"\n--- {sample_dir.name} ---")
+def print_scene_stats(scene_dir: Path, xyz, bbox, masks, rgb):
+    print(f"\n--- {scene_dir.name} ---")
     print(f"RGB shape:        {rgb.shape}")
     print(f"Point cloud shape:{xyz.shape}")
     print(f"Masks shape:      {masks.shape}")
@@ -68,47 +74,59 @@ def print_sample_stats(sample_dir: Path, xyz, bbox, masks, rgb):
     print(f"PC Z range:       [{xyz[2].min():.3f}, {xyz[2].max():.3f}]")
     print(f"BBox center range: x={bbox[:,:,0].mean():.3f}, y={bbox[:,:,1].mean():.3f}, z={bbox[:,:,2].mean():.3f}")
 
-def visualize_sample(sample_dir):
+def visualize_scene(scene_dir: Path, keep_indices: list[int] = None, title: str = None) -> None:
+    xyz, bbox, masks, rgb = load_scene(scene_dir)
 
-    xyz, bbox, masks, rgb = load_sample(sample_dir)
+    if keep_indices is not None:
+        selected_masks = masks[keep_indices]
+        selected_bbox = bbox[keep_indices]
+    else:
+        selected_masks = masks
+        selected_bbox = bbox
 
-    masked_rgb = overlay_mask(rgb, masks)
-
-    fig, ax= plt.subplots(1, 2)
+    masked_rgb = overlay_mask(rgb, selected_masks)
+    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+    fig.suptitle(f"{scene_dir.name} - {title}")
     ax[0].imshow(rgb)
-    ax[0].set_title("Original RGB Image")
-
+    ax[0].set_title("Original RGB")
+    ax[0].axis("off")
     ax[1].imshow(masked_rgb)
-    ax[1].set_title("Masked RGB Image")
-    
+    ax[1].set_title("Selected Masks")
+    ax[1].axis("off")
+    plt.tight_layout()
     plt.show()
 
     # Flatten XYZ map into Nx3 points and align RGB colors to the same flattening order.
     points = convert_xyz_to_points(xyz)
-    colors = rgb.reshape(-1, 3).astype(np.float32)/255.0
+    colors = rgb.reshape(-1, 3).astype(np.float32) / 255.0
+
+    combined_mask = np.any(selected_masks.astype(bool), axis=0).reshape(-1)
 
     # Drop invalid points (NaN/Inf/zeros).
-    valid = np.isfinite(points).all(axis=1) & (points != 0).any(axis=1)
-    points = points[valid]
-    colors = colors[valid]
-        
+    scene_valid = np.isfinite(points).all(axis=1) & (points != 0).any(axis=1)
+    if keep_indices is not None:
+        keep = combined_mask & scene_valid
+    else:
+        keep = scene_valid
+
+    points = points[keep]
+    colors = colors[keep]
+
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
     pcd.colors = o3d.utility.Vector3dVector(colors)
-    bbox_lines = build_bbox_linesets(bbox)
+    bbox_lines = build_bbox_linesets(selected_bbox)
 
     # Add a small coordinate frame at camera origin.
     frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-    o3d.visualization.draw_geometries([pcd,frame, *bbox_lines])
-
-    print_sample_stats(sample_dir, xyz, bbox, masks, rgb)
+    o3d.visualization.draw_geometries([pcd, frame, *bbox_lines])
 
 def main():
     
-    samples = list_samples(raw_data_dir) # raw_data_dir defined in config
+    scenes = list_scenes(raw_data_dir) # raw_data_dir defined in config
 
-    for sample in samples[:10]:
-        visualize_sample(sample)
+    for scene in scenes[:10]:
+        visualize_scene(scene)
 
 if __name__ == "__main__":
     main()
