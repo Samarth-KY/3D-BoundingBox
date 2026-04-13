@@ -6,7 +6,6 @@ from pathlib import Path
 import sys
 import json
 
-# Ensure project-root imports work even when running this file directly from data/.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -14,7 +13,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from data.preprocessing import (
     load_scene,
     convert_xyz_to_points,
-    extract_instance_points,
     sample_points,
     compute_centroid,
     center_points,
@@ -47,17 +45,17 @@ def get_split(scene_dirs: list, val_ratio: float = 0.15, test_ratio: float = 0.1
     train_dirs = remaining[val_size:]
 
     return train_dirs, val_dirs, test_dirs
-    
+
 
 class BBoxDataset(Dataset):
-    def __init__(self, scene_dirs: list[Path], n_points: int = 1024, valid_instances_path:str = None, augment: bool = False):
-        """
-        Flattens scenes into per-instance scenes at init time.
-        """
+    def __init__(self, scene_dirs: list[Path], n_scene_points: int, n_instance_points:int = 1024, valid_instances_path:str = None, augment: bool = False):
         super().__init__()
 
         self.instances = []
-        self.n_points = n_points
+        self.n_instance_points = n_instance_points
+        self.n_scene_points = n_scene_points
+        assert n_scene_points > n_instance_points, f"n_scene_points ({n_scene_points}) must be greater than n_instance_points ({n_instance_points})"
+
         self.augment = augment
 
         if valid_instances_path:
@@ -77,55 +75,103 @@ class BBoxDataset(Dataset):
 
     def __getitem__(self, idx):
         """
-        Returns dict with keys: 'points', 'corners', 'centroid' as torch float32 tensors.
+        Returns dict with keys: 'scene_points', 'instance_points', 'corners', 'centroid' as torch float32 tensors.
         """
         scene_dir, instance_idx = self.instances[idx]
-
         xyz, bbox, masks, rgb = load_scene(scene_dir)
 
-        points          = convert_xyz_to_points(xyz)
-        instance_points = extract_instance_points(points, masks, instance_idx)
-        sampled_points  = sample_points(instance_points, self.n_points)
-        centroid        = compute_centroid(sampled_points)
-        centered_points = center_points(sampled_points, centroid)
-        normalized_points, scale   = normalize_points(centered_points)
+        # Full scene points: [H*W, 3]
+        all_points = convert_xyz_to_points(xyz)
+        # Separate instance points from scene points
+        instance_mask = masks[instance_idx].flatten().astype(bool)  # [H*W]
+        instance_points = all_points[instance_mask]
+        background_points = all_points[~instance_mask]
 
-        corners          = bbox[instance_idx]
+        # Sample each group independently
+        sampled_instance_points, _ = sample_points(instance_points, self.n_instance_points)
+        n_background_points = self.n_scene_points - self.n_instance_points
+        sampled_background_points, _ = sample_points(background_points, n_background_points)
+
+        # Merge: sampled instance points + sampled background points
+        # IMP: instance points must be a subset of sampled scene points. (will be used as anchor points for Pointnet2 predictions)
+        sampled_scene_points = np.concatenate([sampled_instance_points, sampled_background_points], axis=0)
+        # Shuffle so the network doesn't learn positional bias from the ordering
+        shuffle_idx = np.random.permutation(self.n_scene_points)
+        sampled_scene_points = sampled_scene_points[shuffle_idx]
+
+        # Center and normalize using instance points
+        centroid = compute_centroid(sampled_instance_points)
+
+        centered_instance = center_points(sampled_instance_points, centroid)
+        normalized_instance, scale = normalize_points(centered_instance)
+
+        centered_scene = center_points(sampled_scene_points, centroid)
+        if scale != 0:
+            normalized_scene = centered_scene / scale
+        else:
+            normalized_scene = centered_scene
+
+        corners = bbox[instance_idx]
         centered_corners = center_corners(corners, centroid)
-        centered_corners /= scale
+        if scale != 0:
+            normalized_corners = centered_corners / scale
+        else:
+            normalized_corners = centered_corners
+        
+        if self.augment:
+            # Random rotation around Z-axis
+            theta = np.random.uniform(0, 2 * np.pi)
+            cos, sin = np.cos(theta), np.sin(theta)
+            R = np.array([
+                [cos,-sin, 0],
+                [sin, cos, 0],
+                [0, 0, 1],
+            ], dtype=np.float32)
 
-        points = torch.from_numpy(normalized_points).float()
-        corners = torch.from_numpy(centered_corners).float()
-        centroid = torch.from_numpy(centroid).float()
+            normalized_scene = normalized_scene @ R.T
+            normalized_instance = normalized_instance @ R.T
+            normalized_corners = normalized_corners @ R.T
+
+            # Random uniform scaling
+            scale_factor = np.random.uniform(0.9, 1.1)
+            normalized_scene = normalized_scene * scale_factor
+            normalized_instance = normalized_instance *scale_factor
+            normalized_corners = normalized_corners *scale_factor
+
+            # Random jitter
+            normalized_scene = normalized_scene + np.clip(np.random.normal(0, 0.005, normalized_scene.shape), -0.02, 0.02).astype(np.float32)
+            normalized_instance = normalized_instance + np.clip(np.random.normal(0, 0.005, normalized_instance.shape), -0.02, 0.02).astype(np.float32)
+
+        # Convert to tensors
+        scene_points_t = torch.from_numpy(normalized_scene).float()
+        instance_points_t = torch.from_numpy(normalized_instance).float()
+        corners_t = torch.from_numpy(normalized_corners).float()
+        centroid_t = torch.from_numpy(centroid).float()
 
         return {
-            "points": points,
-            "corners": corners,
-            "centroid": centroid,
-            "scale": torch.tensor(scale, dtype=torch.float32)
+            "scene_points": scene_points_t,
+            "instance_points": instance_points_t,
+            "corners": corners_t,
+            "centroid": centroid_t,
+            "scale": torch.tensor(scale, dtype=torch.float32),
         }
-
 
 if __name__ == "__main__":
     scene_dirs = list_scenes(raw_data_dir)
     train_dirs, val_dirs, test_dirs = get_split(scene_dirs=scene_dirs)
 
-    dataset = BBoxDataset(train_dirs, n_points=2048, valid_instances_path=valid_instances_json_dir)
+    dataset = BBoxDataset(train_dirs, n_scene_points=4096, n_instance_points=1024, valid_instances_path=valid_instances_json_dir)
     print(f"Total instances: {len(dataset)}")
 
     scene = dataset[0]
-    print(f"points shape:  {scene['points'].shape}")   
-    print(f"corners shape: {scene['corners'].shape}")  
-    print(f"centroid:      {scene['centroid']}")      
-
-    # Sanity check: centered points should have near-zero mean
-    print(f"points mean (should be ~0): {scene['points'].mean(axis=0)}")
-    print(f"points max : {scene['points'].max()}")
-
-    # Sanity check: corners should also be near the origin
-    print(f"corners mean: {scene['corners'].mean(axis=0)}")
+    print(f"scene_points shape: {scene['scene_points'].shape}")
+    print(f"instance_points shape: {scene['instance_points'].shape}")
+    print(f"corners shape: {scene['corners'].shape}")
+    print(f"centroid: {scene['centroid']}")
+    print(f"scale: {scene['scale']}")
 
     loader = DataLoader(dataset, batch_size=4, shuffle=True)
     batch = next(iter(loader))
-    print(f"batch points: {batch['points'].shape}")  
+    print(f"batch scene_points: {batch['scene_points'].shape}")
+    print(f"batch instance_points: {batch['instance_points'].shape}")
     print(f"batch corners: {batch['corners'].shape}")
