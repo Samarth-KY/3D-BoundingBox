@@ -1,18 +1,12 @@
 import numpy as np
 from pathlib import Path
 from PIL import Image
-import open3d as o3d
 
 def list_scenes(root: Path) -> list[Path]:
     # Each scene is stored in its own directory; sorting keeps iteration deterministic.
     return sorted([p for p in root.iterdir() if p.is_dir()])
 
 def load_scene(scene_dir: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    # Expected per-scene files:
-    # - pc.npy: dense XYZ map 
-    # - bbox3d.npy: 3D bounding box annotations
-    # - mask.npy: instance masks [N, H, W]
-    # - rgb.jpg: color image aligned with the XYZ map
     xyz = np.load(scene_dir / "pc.npy")
     bbox = np.load(scene_dir / "bbox3d.npy")
     masks = np.load(scene_dir / "mask.npy")
@@ -24,11 +18,11 @@ def convert_xyz_to_points(xyz: np.ndarray) -> np.ndarray:
     # Dataset format: [3, H, W], where channels are x,y,z
     if xyz.ndim == 3 and xyz.shape[0] == 3:
         # Channel-first -> channel-last before flattening into a point list.
-        xyz = np.moveaxis(xyz, 0, -1)           # [3, H, W] -> [H, W, 3]
-        points = xyz.reshape(-1, 3)             # [H, W, 3] -> [H*W, 3]
+        xyz = np.moveaxis(xyz, 0, -1) # [3, H, W] -> [H, W, 3]
+        points = xyz.reshape(-1, 3) # [H, W, 3] -> [H*W, 3]
     elif xyz.ndim == 3 and xyz.shape[-1] == 3:
         # Already channel-last, so only flatten spatial dimensions.
-        points = xyz.reshape(-1, 3)             # [H, W, 3] -> [H*W, 3]
+        points = xyz.reshape(-1, 3) # [H, W, 3] -> [H*W, 3]
     else:
         raise ValueError(f"Unsupported point cloud shape: {xyz.shape}")
     return points
@@ -73,7 +67,7 @@ def sample_points(points: np.ndarray, n:int = 1024) -> np.ndarray:
 
     sampled_points = points[indices]
 
-    return sampled_points
+    return sampled_points, indices
 
 def compute_centroid(points: np.ndarray) -> np.ndarray:
     """
