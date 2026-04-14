@@ -48,7 +48,12 @@ def get_split(scene_dirs: list, val_ratio: float = 0.15, test_ratio: float = 0.1
 
 
 class BBoxDataset(Dataset):
-    def __init__(self, scene_dirs: list[Path], n_scene_points: int, n_instance_points:int = 1024, valid_instances_path:str = None, augment: bool = False):
+    def __init__(self, scene_dirs: list[Path], 
+                 n_scene_points: int, 
+                 n_instance_points:int = 1024, 
+                 valid_instances_path:str = None, 
+                 scene_context:bool = True, 
+                 augment: bool = False):
         super().__init__()
 
         self.instances = []
@@ -56,6 +61,7 @@ class BBoxDataset(Dataset):
         self.n_scene_points = n_scene_points
         assert n_scene_points > n_instance_points, f"n_scene_points ({n_scene_points}) must be greater than n_instance_points ({n_instance_points})"
 
+        self.scene_context = scene_context
         self.augment = augment
 
         if valid_instances_path:
@@ -89,15 +95,19 @@ class BBoxDataset(Dataset):
 
         # Sample each group independently
         sampled_instance_points, _ = sample_points(instance_points, self.n_instance_points)
-        n_background_points = self.n_scene_points - self.n_instance_points
-        sampled_background_points, _ = sample_points(background_points, n_background_points)
 
-        # Merge: sampled instance points + sampled background points
-        # IMP: instance points must be a subset of sampled scene points. (will be used as anchor points for Pointnet2 predictions)
-        sampled_scene_points = np.concatenate([sampled_instance_points, sampled_background_points], axis=0)
-        # Shuffle so the network doesn't learn positional bias from the ordering
-        shuffle_idx = np.random.permutation(self.n_scene_points)
-        sampled_scene_points = sampled_scene_points[shuffle_idx]
+        if self.scene_context:
+            n_background_points = self.n_scene_points - self.n_instance_points
+            sampled_background_points, _ = sample_points(background_points, n_background_points)
+            
+            # Merge: sampled instance points + sampled background points
+            # IMP: instance points must be a subset of sampled scene points. (will be used as anchor points for Pointnet2 predictions)
+            sampled_scene_points = np.concatenate([sampled_instance_points, sampled_background_points], axis=0)
+            # Shuffle so the network doesn't learn positional bias from the ordering
+            shuffle_idx = np.random.permutation(self.n_scene_points)
+            sampled_scene_points = sampled_scene_points[shuffle_idx]
+        else:
+            sampled_scene_points = sampled_instance_points
 
         # Center and normalize using instance points
         centroid = compute_centroid(sampled_instance_points)

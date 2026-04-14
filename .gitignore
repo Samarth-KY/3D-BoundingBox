@@ -32,3 +32,11 @@ dist/
 # OS/editor noise
 .DS_Store
 .vscode/
+
+# wandb files
+wandb
+
+# model checkpoints and onnx exports
+checkpoints
+onnx_export/*.onnx
+onnx_export/*.onnx.data

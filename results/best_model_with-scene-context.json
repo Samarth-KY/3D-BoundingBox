@@ -1,0 +1,13 @@
+{
+  "checkpoint_epoch": 197,
+  "val_loss_at_checkpoint": 0.20788591168820858,
+  "n_test_instances": 200,
+  "mean_error_mm": 72.92974853515625,
+  "median_error_mm": 73.68975067138672,
+  "std_error_mm": 42.17189407348633,
+  "p5_error_mm": 17.87523651123047,
+  "p95_error_mm": 141.40342712402344,
+  "recall_20mm": 0.075,
+  "recall_50mm": 0.365,
+  "recall_100mm": 0.77
+}

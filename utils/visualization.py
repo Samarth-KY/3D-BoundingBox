@@ -66,7 +66,7 @@ def build_bbox_linesets(bboxes: np.ndarray, color: tuple = [0.0, 1.0, 0.0]) -> l
     return line_sets
 
 def print_scene_stats(scene_dir: Path, xyz, bbox, masks, rgb):
-    print(f"\n--- {scene_dir.name} ---")
+    print(f"\n--- {scene_dir.name}")
     print(f"RGB shape:        {rgb.shape}")
     print(f"Point cloud shape:{xyz.shape}")
     print(f"Masks shape:      {masks.shape}")
@@ -120,6 +120,77 @@ def visualize_scene(scene_dir: Path, keep_indices: list[int] = None, title: str 
     # Add a small coordinate frame at camera origin.
     frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
     o3d.visualization.draw_geometries([pcd, frame, *bbox_lines])
+
+def _build_scene_pcd(xyz: np.ndarray, rgb: np.ndarray,
+                     keep_indices: list = None,
+                     masks: np.ndarray = None) -> o3d.geometry.PointCloud:
+    """
+    Internal helper: flatten XYZ map, drop invalid points, optionally filter
+    to only points belonging to selected instance masks.
+    """
+    points = convert_xyz_to_points(xyz)
+    colors = rgb.reshape(-1, 3).astype(np.float32) / 255.0
+ 
+    # Drop NaN / Inf / zero-depth points.
+    valid = np.isfinite(points).all(axis=1) & (points != 0).any(axis=1)
+ 
+    if keep_indices is not None and masks is not None:
+        selected_masks = masks[keep_indices]
+        instance_mask = np.any(selected_masks.astype(bool), axis=0).reshape(-1)
+        valid = valid & instance_mask
+ 
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points[valid])
+    pcd.colors = o3d.utility.Vector3dVector(colors[valid])
+    return pcd
+
+def visualize_predictions(
+    scene_dir: Path,
+    instance_indices: list,
+    pred_corners_world: np.ndarray,
+    gt_corners_world: np.ndarray,
+    per_instance_errors_mm: list = None,
+) -> None:
+    """
+    Visualize model predictions vs GT bounding boxes for a scene.
+ 
+    Args:
+        scene_dir: Path to the scene directory.
+        instance_indices: List of instance IDs shown (used for mask selection).
+        pred_corners_world: [N, 8, 3] predicted corners in world coordinates.
+        gt_corners_world: [N, 8, 3] GT corners in world coordinates.
+        per_instance_errors_mm: Optional list of per-instance errors in mm for console output.
+    """
+    xyz, bbox, masks, rgb = load_scene(scene_dir)
+ 
+    # 2D: RGB + selected mask overlay
+    selected_masks = masks[instance_indices]
+    masked_rgb = overlay_mask(rgb, selected_masks)
+    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+    fig.suptitle(f"{scene_dir.name}: Predictions (red) vs GT (green)")
+    ax[0].imshow(rgb);        ax[0].set_title("Original RGB");    ax[0].axis("off")
+    ax[1].imshow(masked_rgb); ax[1].set_title("Instance Masks"); ax[1].axis("off")
+    plt.tight_layout()
+    plt.show()
+ 
+    # Console: per-instance error summary
+    if per_instance_errors_mm is not None:
+        print(f"\nScene: {scene_dir.name}")
+        for inst_id, err_mm in zip(instance_indices, per_instance_errors_mm):
+            print(f"Instance {inst_id:2d}: mean corner error = {err_mm:.1f} mm")
+ 
+    # 3D: point cloud + GT (green) + predictions (red)
+    pcd = _build_scene_pcd(xyz, rgb, instance_indices, masks)
+ 
+    gt_lines   = build_bbox_linesets(gt_corners_world,   color=[0.0, 1.0, 0.0])  # green
+    pred_lines = build_bbox_linesets(pred_corners_world, color=[1.0, 0.0, 0.0])  # red
+ 
+    frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
+ 
+    o3d.visualization.draw_geometries(
+        [pcd, frame, *gt_lines, *pred_lines],
+        window_name=f"{scene_dir.name} Green=GT  Red=Pred",
+    )
 
 def main():
     
