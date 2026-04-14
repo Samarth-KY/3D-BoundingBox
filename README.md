@@ -82,9 +82,9 @@ A valid cuboid has 3 groups of 4 parallel edges that must be equal length. This 
 
 **3. Diagonal Consistency Regularization:**
 ```
-L_diagonal = |diag(pred) - diag(gt)|
+L_diagonal = SmoothL1(||pred[0] - pred[6]||, ||gt[0] - gt[6]||)
 ```
-The space diagonal of a cuboid (connecting opposite corners) is a scale-invariant proxy for overall box size. Penalizing the difference between predicted and GT diagonal lengths helps the model learn correct object extents independently of corner ordering.
+The diagonal connecting corners 0 and 6 (diagonally opposite) serves as a proxy for overall box scale. Penalizing the Smooth L1 difference between predicted and GT diagonal lengths encourages the model to learn correct object extents. Note this simplification assumes consistent corner ordering in the GT annotations.
 
 **Total loss:**
 ```
