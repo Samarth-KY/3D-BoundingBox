@@ -257,7 +257,7 @@ Three model variants were trained and evaluated on the same held-out test set (1
 ![Training Curves](assets/train_losses.png)
 ![Validation Curves](assets/val_losses.png)
 
-### Prediction Visualizations
+### Prediction Visualizations (Green - GT vs Red - Pred)
 
 ![Model Prediction Visualization 1](assets/example_pred_vis_1.png)
 ![Model Prediction Visualization 2](assets/example_pred_vis_2.png)
